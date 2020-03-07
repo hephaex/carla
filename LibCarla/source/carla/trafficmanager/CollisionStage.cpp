@@ -74,7 +74,7 @@ namespace CollisionStageConstants {
 
       const SimpleWaypointPtr& closest_point = data.closest_waypoint;
       const SimpleWaypointPtr& junction_look_ahead = data.junction_look_ahead_waypoint;
-      const std::unordered_map<ActorId, Actor> overlapping_actors = data.overlapping_actors;
+      const std::vector<std::pair<ActorId, Actor>> overlapping_actors = data.overlapping_actors;
 
       bool collision_hazard = false;
       float available_distance_margin = std::numeric_limits<float>::infinity();
@@ -83,33 +83,15 @@ namespace CollisionStageConstants {
 
       try {
 
-        // Copy overlapping actors to a vector and sorting in accending order of distance to current vehicle.
-        using ActorInfo = std::pair<ActorId, Actor>;
-        std::vector<ActorInfo> collision_candidates;
-
-        std::copy_if(overlapping_actors.begin(), overlapping_actors.end(),
-                    std::back_insert_iterator< std::vector<ActorInfo>>(collision_candidates),
-                    [&ego_location] (const ActorInfo& actor_info) {
-                      return (actor_info.second->IsAlive()
-                              && cg::Math::DistanceSquared(actor_info.second->GetLocation(),
-                                                            ego_location) < std::pow(MAX_COLLISION_RADIUS, 2));
-                    });
-
-        std::sort(collision_candidates.begin(), collision_candidates.end(),
-                  [&ego_location] (const ActorInfo& a_info_1, const ActorInfo& a_info_2) {
-                    const cg::Location& e_loc = ego_location;
-                    const cg::Location loc_1 = a_info_1.second->GetLocation();
-                    const cg::Location loc_2 = a_info_2.second->GetLocation();
-                    return (cg::Math::DistanceSquared(e_loc, loc_1) < cg::Math::DistanceSquared(e_loc, loc_2));
-                  });
-
         // Check every actor in the vicinity if it poses a collision hazard.
-        for (auto actor_info = collision_candidates.begin();
-            actor_info != collision_candidates.end() && !collision_hazard;
+        for (auto actor_info = overlapping_actors.begin();
+            actor_info != overlapping_actors.end() && !collision_hazard;
             ++actor_info) {
 
           const ActorId other_actor_id = actor_info->first;
           const Actor other_actor = actor_info->second;
+          // Pass if vehicle destroyed.
+          if (!other_actor->IsAlive()) {continue;}
           const auto other_actor_type = other_actor->GetTypeId();
           const cg::Location other_location = other_actor->GetLocation();
 

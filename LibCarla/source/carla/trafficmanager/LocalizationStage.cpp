@@ -26,6 +26,7 @@ namespace LocalizationConstants {
   static const float DELTA_TIME_BETWEEN_DESTRUCTIONS = 10.0f;
   static const float STOPPED_VELOCITY_THRESHOLD = 0.8f;  // meters per second.
   static const float INTER_LANE_CHANGE_DISTANCE = 10.0f;
+  static const float MAX_COLLISION_RADIUS = 100.0f;
 
 } // namespace LocalizationConstants
 
@@ -286,8 +287,13 @@ namespace LocalizationConstants {
       LocalizationToCollisionData &collision_message = current_collision_frame->at(i);
       collision_message.actor = vehicle;
       collision_message.buffer = waypoint_buffer;
-      collision_message.overlapping_actors.clear();
+
+      // Obtain potential collision candidates.
       ActorIdSet overlapping_actor_set = track_traffic.GetOverlappingVehicles(actor_id);
+      using ActorInfo = std::pair<ActorId, Actor>;
+      std::vector<ActorInfo> overlapping_actors;
+
+      // Find the candidate ids in registered or unregistered list and get their pointers.
       for (ActorId overlapping_actor_id: overlapping_actor_set) {
         Actor actor_ptr = nullptr;
         if (vehicle_id_to_index.find(overlapping_actor_id) != vehicle_id_to_index.end()) {
@@ -296,10 +302,30 @@ namespace LocalizationConstants {
           actor_ptr = unregistered_actors.at(overlapping_actor_id);
         }
         if (actor_ptr!=nullptr) {
-          collision_message.overlapping_actors.insert({overlapping_actor_id, actor_ptr});
+          overlapping_actors.push_back({overlapping_actor_id, actor_ptr});
         }
         collision_message.safe_point_after_junction = final_safe_points[actor_id];
       }
+
+      // Copy overlapping actors to a vector and sorting in accending order of distance to current vehicle.
+      std::vector<ActorInfo> collision_candidates;
+      std::copy_if(overlapping_actors.begin(), overlapping_actors.end(),
+                  std::back_insert_iterator< std::vector<ActorInfo>>(collision_candidates),
+                  [&vehicle_location] (const ActorInfo& actor_info) {
+                    return (actor_info.second->IsAlive()
+                            && cg::Math::DistanceSquared(actor_info.second->GetLocation(),
+                                                          vehicle_location) < std::pow(MAX_COLLISION_RADIUS, 2));
+                  });
+
+      std::sort(collision_candidates.begin(), collision_candidates.end(),
+                [&vehicle_location] (const ActorInfo a_info_1, const ActorInfo a_info_2) {
+                  const cg::Location& e_loc = vehicle_location;
+                  const cg::Location loc_1 = a_info_1.second->GetLocation();
+                  const cg::Location loc_2 = a_info_2.second->GetLocation();
+                  return (cg::Math::DistanceSquared(e_loc, loc_1) < cg::Math::DistanceSquared(e_loc, loc_2));
+                });
+
+      collision_message.overlapping_actors = overlapping_actors;
       collision_message.closest_waypoint = updated_front_waypoint;
       collision_message.junction_look_ahead_waypoint = waypoint_buffer.at(look_ahead_index);
 
@@ -312,6 +338,7 @@ namespace LocalizationConstants {
       UpdateIdleTime(vehicle);
     }
 
+    // Destroy actor and unregister from traffic manager if it is stuck for too long.
     if (IsVehicleStuck(maximum_idle_time.first)) {
       TryDestroyVehicle(maximum_idle_time.first);
     }
